@@ -9,6 +9,7 @@ An Admin will need to generate an access token allowing access to Webhooks & Sel
 
 ![Access Token Repo Access](/images/RepositoryAccess.png)
 ![Access Token Permissions](/images/Permissions.png)
+
   2. Deploy the stack using your cli of choice. You will need to specify:
      1. Your Organisation Name - githubOrgNameParam
      2. Your Access Token - githubOrgTokenParam
