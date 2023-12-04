@@ -1,0 +1,725 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  githubOrgNameParam:
+    Type: String
+    Description: url for the gitlab runner registeration
+    Default: ""
+    #AllowedPattern: '^[a-zA-Z0-9_-]'
+  githubOrgTokenParam:
+    Type: String
+    Description: admin token with access to the ORG for the application to use
+    Default: ""
+    #AllowedPattern: github_pat_[A-Za-z0-9_]+
+###########################
+  vpcCIDR:
+    Type: String
+    Description: cidr block for the vpc (and subnet)
+    Default: 10.15.0.0/16
+
+Globals:
+  Function:
+    CodeUri: ./
+    Runtime: nodejs20.x
+    MemorySize: 3008
+    Timeout: 900
+
+Resources:
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-InternetGateway"
+  
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref ECSvpc
+  
+  networkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref ECSvpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-networkAcl"
+  
+  ACLInboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref networkAcl
+      RuleNumber: 100
+      Egress: false # outgoing
+      Protocol: -1 # according to this list https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+  
+  ACLOutboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref networkAcl
+      RuleNumber: 100
+      Egress: true # outgoing
+      Protocol: -1 # according to this list https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+  
+  subnetANetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref subnetA
+      NetworkAclId: !Ref networkAcl
+  
+  subnetBNetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref subnetB
+      NetworkAclId: !Ref networkAcl
+  
+  subnetCNetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref subnetC
+      NetworkAclId: !Ref networkAcl
+  
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ECSvpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicRouteTable"
+  
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+    DependsOn:
+      - VPCGatewayAttachment  
+  
+  subnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref subnetA
+  
+  subnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref subnetB
+  
+  subnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref subnetC
+  
+  ECSvpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref vpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+  
+  subnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Select [0, !Cidr [ !GetAtt ECSvpc.CidrBlock, 3, 8 ]] # 10.12.0.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref "AWS::Region"]
+      VpcId: !Ref ECSvpc
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-subnetA"
+  
+  subnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Select [1, !Cidr [ !GetAtt ECSvpc.CidrBlock, 3, 8 ]] # 10.12.0.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref "AWS::Region"]
+      VpcId: !Ref ECSvpc
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-subnetB"
+  
+  subnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Select [2, !Cidr [ !GetAtt ECSvpc.CidrBlock, 3, 8 ]] # 10.12.0.0/24
+      AvailabilityZone: !Select [2, Fn::GetAZs: !Ref "AWS::Region"]
+      VpcId: !Ref ECSvpc
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-subnetC"
+  
+  instanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: !Sub "${AWS::StackName}-SecurityGroup description"
+      GroupName: !Sub "${AWS::StackName}-SecurityGroup"
+      VpcId: !Ref ECSvpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-instanceSecurityGroup"
+  
+#####################
+### ECS RESOURCES ###
+#####################
+  
+  ECSTaskExecutionRole: # Role used by the container to make AWS API calls on the user's behalf
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ECSTaskExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  
+  ECSTaskRole: # Role that allows containers in the make to make API requests to AWS Services
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ECSTaskRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-role-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ssm:GetParameter"
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  
+  cluster:
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+      ServiceConnectDefaults:
+        Namespace: !Sub "${AWS::StackName}-cluster"
+      CapacityProviders:
+        - FARGATE
+        #- FARGATE_SPOT
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Configuration:
+         ExecuteCommandConfiguration:
+            Logging: DEFAULT
+  
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-TaskDefinition"
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      NetworkMode: awsvpc # awsvpc is required for ECS tasks on Fargate
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: "512" # 0.5vCPU
+      Memory: "1024" # 1 GB
+      EphemeralStorage:
+        SizeInGiB: 21 # min is 21, max is 200
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        -
+          Name: !Sub "${AWS::StackName}-container"
+          #Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${imageRepoName}:latest"
+          Image: amazonlinux:2023
+          Essential: true
+          Command:
+            - "/bin/bash"
+            - "-c"
+            - |
+              yum -y update
+              yum install -y aws-cli
+              yum install -y tar
+              yum install -y gzip
+              yum install -y libicu
+              cd /
+              mkdir actions-runner && cd actions-runner
+              curl -o actions-runner-linux-x64-2.311.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.311.0/actions-runner-linux-x64-2.311.0.tar.gz
+              tar xzf ./actions-runner-linux-x64-2.311.0.tar.gz
+              ORG_NAME=$(aws ssm get-parameter --name /github-runners-webhook-fleet/githubOrgNameSSM --query Parameter.Value --output text --region eu-west-2)
+              ORG_RUNNER_TOKEN=$(aws ssm get-parameter --name /github-runners-webhook-fleet/githubOrgRunnerTokenSSM --query Parameter.Value --output text --region eu-west-2)
+              RUNNER_ALLOW_RUNASROOT=true ./config.sh --url https://github.com/$ORG_NAME --token $ORG_RUNNER_TOKEN --unattended --no-default-labels --labels self-hosted --ephemeral
+              RUNNER_ALLOW_RUNASROOT=true ./run.sh
+              exit 0
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-group: !Ref containerLogs
+              awslogs-stream-prefix: "prefix"
+  
+  containerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/aws/ecs/, !Ref cluster]]
+  
+  service:
+    Type: AWS::ECS::Service
+    Properties:
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      Cluster: !GetAtt cluster.Arn
+      ServiceName: !Sub "${AWS::StackName}-test-service"
+      DesiredCount: 0
+      PlatformVersion: "1.4.0"
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: false
+          Rollback: false
+      DeploymentController:
+        Type: ECS
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref instanceSecurityGroup
+          Subnets:
+            - !Ref subnetA
+            - !Ref subnetB
+            - !Ref subnetC
+      EnableExecuteCommand: true
+  
+######################
+### SSM Parameters ###
+######################
+  
+  githubOrgNameSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AWS::StackName}/githubOrgNameSSM"
+      Description: !Sub "${AWS::StackName} githubOrgNameSSM desc"
+      DataType: text
+      AllowedPattern: '^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$'
+      Tier: Standard
+      Type: String
+      Value: !Ref githubOrgNameParam
+  
+  githubOrgTokenSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AWS::StackName}/githubOrgTokenSSM"
+      Description: !Sub "${AWS::StackName} githubOrgTokenSSM desc"
+      DataType: text
+      AllowedPattern: github_pat_[A-Za-z0-9_]+
+      Tier: Standard
+      Type: String
+      Value: !Ref githubOrgTokenParam
+  
+  githubOrgHookIdSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AWS::StackName}/githubOrgHookIdSSM"
+      Description: !Sub "${AWS::StackName} githubOrgHookIdSSM desc"
+      DataType: text
+      AllowedPattern: ^\d+$
+      Tier: Standard
+      Type: String
+      Value: 0
+  
+  githubOrgRunnerTokenSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AWS::StackName}/githubOrgRunnerTokenSSM"
+      Description: !Sub "${AWS::StackName} githubOrgRunnerTokenSSM desc"
+      DataType: text
+      AllowedPattern: "[A-Za-z0-9_]+"
+      Tier: Standard
+      Type: String
+      Value: 0
+  
+  webhookAPISecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-webhookAPISecret"
+      Description: !Sub "${AWS::StackName}-webhookAPISecret description"
+      GenerateSecretString:
+        ExcludeCharacters: String
+        ExcludeLowercase: false
+        ExcludeNumbers: false
+        ExcludePunctuation: false
+        ExcludeUppercase: false
+        IncludeSpace: false
+        PasswordLength: 45
+        RequireEachIncludedType: true
+  
+#############
+### ROLES ###
+#############
+  
+  createOrUpdateLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-createOrUpdateLambdaRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-createOrUpdateLambdaRole-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ssm:PutParameter"
+                  - "ssm:GetParametersByPath"
+                  - "ssm:GetParameters"
+                  - "ssm:GetParameter"
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*"
+              - Effect: Allow
+                Action:
+                  - "ecs:DescribeServices"
+                Resource:
+                  - !Ref service
+              - Effect: Allow
+                Action:
+                  - "ecs:RunTask"
+                Resource:
+                  - !GetAtt TaskDefinition.TaskDefinitionArn
+              - Effect: Allow
+                Action:
+                  - "iam:PassRole"
+                Resource:
+                  - !GetAtt ECSTaskExecutionRole.Arn
+                  - !GetAtt ECSTaskRole.Arn
+              - Effect: Allow
+                Action:
+                  - "secretsmanager:GetSecretValue"
+                Resource:
+                  - !Ref webhookAPISecret
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  
+  ApiIntegrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ApiIntegrationRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-api-role-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: "lambda:InvokeFunction"
+                Resource: "*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  
+#######################
+#### API RESOURCES ####
+#######################
+  
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      #StageName: !Ref StageName
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 200
+      FailOnWarnings: true
+    DependsOn:
+      - deleteWebhook
+      - deleteWebhookLogGroup
+      - deleteWebhookEBPermission
+      - deleteWebhookRule
+      - receiveGithubWebhookEvents
+      - receiveGithubWebhookEventsLogGroup
+      - receiveGithubWebhookEventsMetricFilter
+  
+  receiveEventsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      CredentialsArn: !GetAtt ApiIntegrationRole.Arn
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt receiveGithubWebhookEvents.Arn
+          - /invocations
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+  
+  receiveEventsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      OperationName: !Sub "${AWS::StackName}-receiveEventsRoute"
+      ApiId: !Ref HttpApi
+      #AuthorizationType: CUSTOM
+      AuthorizationType: NONE
+      #AuthorizerId: !Ref Authorizer
+      RouteKey: 'POST /'
+      Target: !Sub "integrations/${receiveEventsIntegration}"
+  
+########################
+#### RECEIVE EVENTS ####
+########################
+  
+  receiveGithubWebhookEvents:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-receiveGithubWebhookEvents"
+      Handler: src/webhook/receiveEvent.handler
+      Role: !GetAtt createOrUpdateLambdaRole.Arn
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref cluster
+          CLUSTER_SERVICE_NAME: !GetAtt service.Name
+          API_SECRET: !Ref webhookAPISecret
+  
+  receiveGithubWebhookEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/lambda/', !Ref receiveGithubWebhookEvents]]
+  
+  receiveGithubWebhookEventsMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterName: !Sub "${receiveGithubWebhookEventsLogGroup}-MetricFilter"
+      LogGroupName: !Ref receiveGithubWebhookEventsLogGroup
+      FilterPattern: "{ $.message = \"workflow queued\" }"
+      MetricTransformations:
+        - MetricName: WorkflowQueued
+          MetricValue: "1"
+          MetricNamespace: !Sub "${AWS::StackName}"
+          Unit: Count
+  
+  receiveGithubWebhookEventsEBPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt receiveGithubWebhookEvents.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+  
+########################
+#### CREATE WEBHOOK ####
+########################
+  
+  createWebhook:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-createWebhook"
+      Handler: src/webhook/create.handler
+      Role: !GetAtt createOrUpdateLambdaRole.Arn
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          GITHUB_ORG_NAME_SSM: !Ref githubOrgNameSSM
+          GITHUB_ORG_TOKEN_SSM: !Ref githubOrgTokenSSM
+          GITHUB_ORG_HOOK_ID_SSM: !Ref githubOrgHookIdSSM
+          API_URL: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+          API_SECRET: !Ref webhookAPISecret
+  
+  createWebhookLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/lambda/', !Ref createWebhook]]
+  
+  createWebhookEBPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt createWebhook.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+  
+  createWebhookRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-createWebhookRule"
+      EventPattern:
+        source:
+          - aws.cloudformation
+        detail-type:
+          - CloudFormation Stack Status Change
+        account:
+          - !Ref AWS::AccountId
+        region:
+          - !Ref AWS::Region
+        detail:
+          stack-id:
+            - prefix: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}"
+          status-details:
+            status:
+              - CREATE_COMPLETE
+      Targets:
+        - Id: create-webhook-event
+          Arn: !GetAtt createWebhook.Arn
+  
+########################
+#### DELETE WEBHOOK ####
+########################
+  
+  deleteWebhook:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-deleteWebhook"
+      Handler: src/webhook/delete.handler
+      Role: !GetAtt createOrUpdateLambdaRole.Arn
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          GITHUB_ORG_NAME_SSM: !Ref githubOrgNameSSM
+          GITHUB_ORG_TOKEN_SSM: !Ref githubOrgTokenSSM
+          GITHUB_ORG_HOOK_ID_SSM: !Ref githubOrgHookIdSSM
+  
+  deleteWebhookLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/lambda/', !Ref deleteWebhook]]
+  
+  deleteWebhookEBPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt deleteWebhook.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+  
+  deleteWebhookRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-deleteWebhookRule"
+      EventPattern:
+        source:
+          - aws.cloudformation
+        detail-type:
+          - CloudFormation Stack Status Change
+        account:
+          - !Ref AWS::AccountId
+        region:
+          - !Ref AWS::Region
+        detail:
+          stack-id:
+            - prefix: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}"
+          status-details:
+            status:
+              - DELETE_IN_PROGRESS
+      Targets:
+        - Id: delete-webhook-event
+          Arn: !GetAtt deleteWebhook.Arn
+  
+#############################
+#### ROTATE RUNNER TOKEN ####
+#############################
+  
+  rotateRunnerToken:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-rotateRunnerToken"
+      Handler: src/runner/rotate-token.handler
+      Role: !GetAtt createOrUpdateLambdaRole.Arn
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          GITHUB_ORG_NAME_SSM: !Ref githubOrgNameSSM
+          GITHUB_ORG_TOKEN_SSM: !Ref githubOrgTokenSSM
+          GITHUB_ORG_RUNNER_TOKEN_SSM: !Ref githubOrgRunnerTokenSSM
+  
+  rotateRunnerTokenLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/lambda/', !Ref rotateRunnerToken]]
+  
+  rotateRunnerTokenEBPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt rotateRunnerToken.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+  
+  rotateRunnerTokenRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-rotateRunnerTokenRule"
+      EventPattern:
+        source:
+          - aws.cloudformation
+        detail-type:
+          - CloudFormation Stack Status Change
+        account:
+          - !Ref AWS::AccountId
+        region:
+          - !Ref AWS::Region
+        detail:
+          stack-id:
+            - prefix: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}"
+          status-details:
+            status:
+              - CREATE_COMPLETE
+      Targets:
+        - Id: rotate-runner-token
+          Arn: !GetAtt rotateRunnerToken.Arn
+  
+  rotateRunnerTokenCRONRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-rotateRunnerTokenCRONRule"
+      ScheduleExpression: rate(55 minutes)
+      Targets:
+        - Id: rotate-runner-token
+          Arn: !GetAtt rotateRunnerToken.Arn
+

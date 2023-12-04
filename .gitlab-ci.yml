@@ -1,0 +1,21 @@
+image: public.ecr.aws/sam/build-nodejs18.x:latest
+ 
+stages:
+  - deploy
+ 
+variables:
+  STACK_NAME: ecs-github-runners
+  REGION: eu-west-2
+  S3_DEPLOY_BUCKET: $S3_DEPLOY_BUCKET
+  GITHUB_ORG_NAME: $GITHUB_ORG_NAME
+  GITHUB_ORG_TOKEN: $GITHUB_ORG_TOKEN
+
+deploy:
+  stage: deploy
+  script:
+    - echo "$GITHUB_ORG_NAME"
+    - echo "$GITHUB_ORG_TOKEN"
+    - sam build
+    - sam package --output-template-file packaged.yaml --s3-bucket $S3_DEPLOY_BUCKET --region $REGION
+    # Uses token from CICD
+    - sam deploy --no-fail-on-empty-changeset --template-file packaged.yaml --stack-name $STACK_NAME --s3-bucket $S3_DEPLOY_BUCKET --capabilities CAPABILITY_NAMED_IAM --region $REGION --parameter-overrides githubOrgNameParam=$GITHUB_ORG_NAME githubOrgTokenParam=$GITHUB_ORG_TOKEN
